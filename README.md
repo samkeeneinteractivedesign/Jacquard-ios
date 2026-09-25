@@ -35,6 +35,10 @@ paste it, double tap a `CHAN` to start or stop its lane. Drag a bar right or up 
 it; double tap it to type a number; double tap a row's name to take it back. With a
 hardware keyboard the arrows, delete, return and space work as on the desktop.
 
+On an iPad the panels stand on the plane in columns, as upstream. On a phone they share
+a dock along the bottom, one at a time: the Tile panel, or the panel a top-bar switch
+raised last; Live FX stands over the dock while it is raised.
+
 Scores live in `Documents/Scores`, which the Files app shows under On My iPhone (or iPad)
 › Jacquard. A fresh install writes the five samples and nine empty slots there, as the
 original does, and pick one with the arrows beside Save and Load.
@@ -43,7 +47,6 @@ original does, and pick one with the arrows beside Save and Load.
 
 - The three onboarding pages shown on first launch
 - Measured clock calibration (`DspClock`); the driver uses a fixed lead of two IO buffers
-- On a phone the panel columns overlap one another; the layout is the tablet's
 
 ## Building
 

@@ -224,7 +224,7 @@ struct LivePanel: View {
     static let bottom: [LiveEffect] = [.delay, .sustain, .octaveUp, .rise, .roll2, .roll4]
 
     var body: some View {
-        Panel(title: "Live FX", width: nil) {
+        Panel(title: "Live FX", fitsContent: true) {
             row(LivePanel.top)
             row(LivePanel.bottom)
         }

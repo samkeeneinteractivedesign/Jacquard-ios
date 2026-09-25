@@ -38,11 +38,27 @@ enum Controls {
     }
 }
 
+// How wide a panel stands: the column's width on a tablet, the dock's on a phone.
+private struct PanelWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = Controls.panelWidth
+}
+
+extension EnvironmentValues {
+    var panelWidth: CGFloat? {
+        get { self[PanelWidthKey.self] }
+        set { self[PanelWidthKey.self] = newValue }
+    }
+}
+
 // A panel: its subject as the header, then its rows.
 struct Panel<Content: View>: View {
     let title: String
-    var width: CGFloat? = Controls.panelWidth
+    var fitsContent = false
     @ViewBuilder let content: () -> Content
+
+    @Environment(\.panelWidth) private var panelWidth
+
+    private var width: CGFloat? { fitsContent ? nil : panelWidth }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

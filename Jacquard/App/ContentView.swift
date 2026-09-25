@@ -3,79 +3,42 @@ import SwiftUI
 // The screen. Ported from the layout half of Assets/Jacquard/UI/JacquardUI.cs.
 //
 // The visualizer behind everything; the plane over it; the transport row along the top
-// on a ground of its own; and the panels standing on the plane — the Tile panel in the
-// right column outermost with Send FX inside it, Channels on the left, Global and System
-// in the centre, Live FX across the bottom. Everything the transport row switches starts
-// off.
+// on a ground of its own; and the panels — standing on the plane in columns on a tablet,
+// as upstream, and sharing a dock under it on a phone. Everything the transport row
+// switches starts off.
 
 struct ContentView: View {
     @State private var engine = JacquardEngine()
     @State private var stageMode = StageMode.on
-    @State private var shown: Set<PanelKind> = []
+    @State private var raised: [PanelKind] = []
     @Environment(\.scenePhase) private var scenePhase
 
     enum PanelKind: String { case channels, send, live, global, system }
 
+    // Below this width two columns of panels cannot stand side by side without covering
+    // the plane, so the phone layout takes over.
+    static let dockBelow: CGFloat = 600
+
     var body: some View {
-        let editor = engine.editor!
+        GeometryReader { geometry in
+            let compact = geometry.size.width < ContentView.dockBelow
 
-        ZStack {
-            if engine.visualizerOn {
-                VisualizerView(engine: engine)
-                    .ignoresSafeArea()
-            } else {
-                Style.background.ignoresSafeArea()
-            }
+            ZStack {
+                if engine.visualizerOn {
+                    VisualizerView(engine: engine)
+                        .ignoresSafeArea()
+                } else {
+                    Style.background.ignoresSafeArea()
+                }
 
-            VStack(spacing: 0) {
-                TransportRow(engine: engine, stageMode: stageMode, shown: $shown)
+                VStack(spacing: 0) {
+                    TransportRow(engine: engine, stageMode: stageMode,
+                                 isShown: { raised.contains($0) }, toggle: toggle)
 
-                ZStack(alignment: .top) {
-                    ScorePlaneView(engine: engine, editor: editor)
-
-                    // Each column is laid over the plane without taking any room from it
-                    // or from the others. On a phone the columns meet, and a panel a
-                    // switch raised stands in front of the Tile panel, since it is the one
-                    // just asked for.
-                    Color.clear
-                        .overlay(alignment: .topTrailing) {
-                            HStack(alignment: .top, spacing: Controls.panelGap) {
-                                PanelColumn {
-                                    if shown.contains(.send) { SendPanel(engine: engine, editor: editor) }
-                                }
-                                PanelColumn {
-                                    InspectorPanel(engine: engine, editor: editor)
-                                }
-                            }
-                        }
-                        .overlay(alignment: .top) {
-                            PanelColumn {
-                                if shown.contains(.global) { GlobalPanel(engine: engine, editor: editor) }
-                                if shown.contains(.system) {
-                                    SystemPanel(engine: engine, editor: editor, stageMode: $stageMode)
-                                }
-                            }
-                        }
-                        .overlay(alignment: .topLeading) {
-                            PanelColumn {
-                                if shown.contains(.channels) {
-                                    ChannelsPanel(engine: engine, editor: editor, stageMode: stageMode)
-                                }
-                            }
-                        }
-                        .padding(Controls.panelGap)
-
-                    if shown.contains(.live) {
-                        VStack {
-                            Spacer()
-                            ScrollView(.horizontal) {
-                                LivePanel(engine: engine)
-                            }
-                            .scrollIndicators(.hidden)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.horizontal, Controls.panelGap)
-                            .padding(.bottom, Controls.panelGap)
-                        }
+                    if compact {
+                        phoneBody(height: geometry.size.height)
+                    } else {
+                        tabletBody
                     }
                 }
             }
@@ -86,7 +49,7 @@ struct ContentView: View {
             let arguments = ProcessInfo.processInfo.arguments
             if let i = arguments.firstIndex(of: "-panels"), i + 1 < arguments.count {
                 for name in arguments[i + 1].split(separator: ",") {
-                    if let kind = PanelKind(rawValue: String(name)) { shown.insert(kind) }
+                    if let kind = PanelKind(rawValue: String(name)) { raised.append(kind) }
                 }
             }
         }
@@ -101,6 +64,111 @@ struct ContentView: View {
             }
         }
     }
+
+    private func toggle(_ kind: PanelKind) {
+        if let index = raised.firstIndex(of: kind) { raised.remove(at: index) }
+        else { raised.append(kind) }
+    }
+
+    @ViewBuilder
+    private func panel(_ kind: PanelKind) -> some View {
+        let editor = engine.editor!
+        switch kind {
+        case .channels: ChannelsPanel(engine: engine, editor: editor, stageMode: stageMode)
+        case .send: SendPanel(engine: engine, editor: editor)
+        case .global: GlobalPanel(engine: engine, editor: editor)
+        case .system: SystemPanel(engine: engine, editor: editor, stageMode: $stageMode)
+        case .live: LivePanel(engine: engine)
+        }
+    }
+
+    // MARK: Tablet
+
+    // Each column is laid over the plane without taking any room from it or from the
+    // others: the Tile panel in the right column outermost with Send FX inside it,
+    // Channels on the left, Global and System in the centre, Live FX across the bottom.
+    private var tabletBody: some View {
+        let editor = engine.editor!
+
+        return ZStack(alignment: .top) {
+            ScorePlaneView(engine: engine, editor: editor)
+
+            Color.clear
+                .overlay(alignment: .topTrailing) {
+                    HStack(alignment: .top, spacing: Controls.panelGap) {
+                        PanelColumn {
+                            if raised.contains(.send) { panel(.send) }
+                        }
+                        PanelColumn {
+                            InspectorPanel(engine: engine, editor: editor)
+                        }
+                    }
+                }
+                .overlay(alignment: .top) {
+                    PanelColumn {
+                        if raised.contains(.global) { panel(.global) }
+                        if raised.contains(.system) { panel(.system) }
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    PanelColumn {
+                        if raised.contains(.channels) { panel(.channels) }
+                    }
+                }
+                .padding(Controls.panelGap)
+
+            if raised.contains(.live) {
+                VStack {
+                    Spacer()
+                    ScrollView(.horizontal) { panel(.live) }
+                        .scrollIndicators(.hidden)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, Controls.panelGap)
+                        .padding(.bottom, Controls.panelGap)
+                }
+            }
+        }
+    }
+
+    // MARK: Phone
+
+    // A phone has room for the plane or for a column, not both side by side, so the
+    // panels share a dock along the bottom and the plane keeps everything above it. The
+    // dock shows one panel at a time: the one a switch raised last, or, with none raised,
+    // the Tile panel, which is what follows the cursor. Letting a switch go hands the dock
+    // back to whatever was raised before it. Live FX stands over the dock rather than in
+    // it, since it is played while the plane is watched and not instead of the Tile panel.
+    private func phoneBody(height: CGFloat) -> some View {
+        let editor = engine.editor!
+        let docked = raised.last { $0 != .live }
+
+        return VStack(spacing: 0) {
+            ScorePlaneView(engine: engine, editor: editor)
+
+            if raised.contains(.live) {
+                ScrollView(.horizontal) { panel(.live) }
+                    .scrollIndicators(.hidden)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(Style.panel)
+                    .overlay(alignment: .top) { Rectangle().fill(Style.panelLine).frame(height: 1) }
+            }
+
+            ScrollView(.vertical) {
+                Group {
+                    if let docked { panel(docked) } else { InspectorPanel(engine: engine, editor: editor) }
+                }
+                .environment(\.panelWidth, nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.hidden)
+            .frame(height: height * ContentView.dockShare)
+            .background(Style.panel.ignoresSafeArea(edges: .bottom))
+            .overlay(alignment: .top) { Rectangle().fill(Style.panelLine).frame(height: 1) }
+        }
+    }
+
+    // How much of a phone's height the dock takes.
+    static let dockShare: CGFloat = 0.4
 }
 
 // A column of panels that is as tall as what it holds, and scrolls once that is more
@@ -128,7 +196,8 @@ private struct PanelColumn<Content: View>: View {
 private struct TransportRow: View {
     let engine: JacquardEngine
     let stageMode: Bool
-    @Binding var shown: Set<ContentView.PanelKind>
+    let isShown: (ContentView.PanelKind) -> Bool
+    let toggle: (ContentView.PanelKind) -> Void
 
     @State private var slots: [String] = []
 
@@ -197,9 +266,7 @@ private struct TransportRow: View {
     }
 
     private func toggle(_ label: String, _ kind: ContentView.PanelKind) -> some View {
-        PushButton(label: label, width: Controls.width(62), active: shown.contains(kind)) {
-            if shown.contains(kind) { shown.remove(kind) } else { shown.insert(kind) }
-        }
+        PushButton(label: label, width: Controls.width(62), active: isShown(kind)) { toggle(kind) }
     }
 
     private var separator: some View {
