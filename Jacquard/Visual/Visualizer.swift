@@ -24,7 +24,7 @@ final class VisualizerRenderer: NSObject, MTKViewDelegate {
     init?(view: MTKView, engine: JacquardEngine) {
         guard let device = view.device ?? MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
-              let library = try? device.makeLibrary(source: VisualizerShader.source, options: nil)
+              let library = device.makeDefaultLibrary()
         else { return nil }
 
         self.engine = engine

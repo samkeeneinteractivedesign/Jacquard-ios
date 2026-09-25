@@ -34,10 +34,8 @@ full argument.
 ## Building
 
 Open `Jacquard.xcodeproj` in Xcode 26 and run the `Jacquard` scheme (iOS 18+). The
-visualizer's shader is compiled at launch from `VisualizerShader.swift`, because the
-Metal compiler is an optional Xcode component; once it is installed
-(`xcodebuild -downloadComponent MetalToolchain`) the shader can move back to a `.metal`
-file.
+visualizer's shader is `Jacquard/Visual/Visualizer.metal`, which needs Xcode's Metal
+Toolchain component (`xcodebuild -downloadComponent MetalToolchain`).
 
 On a simulator, `-load sample1 -autoplay` as launch arguments loads a bundled score
 and presses Play.

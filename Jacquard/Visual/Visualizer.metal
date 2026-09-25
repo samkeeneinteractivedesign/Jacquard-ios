@@ -1,12 +1,3 @@
-// The visualizer's shader, compiled when the renderer starts.
-//
-// Kept as source rather than a .metal file because the Metal compiler is a separate
-// Xcode component (xcodebuild -downloadComponent MetalToolchain) that this machine does
-// not have, and one shader this small costs nothing to compile at launch. Moving it back
-// to a .metal file is a rename once the toolchain is installed.
-
-enum VisualizerShader {
-    static let source = """
 #include <metal_stdlib>
 using namespace metal;
 
@@ -47,6 +38,4 @@ vertex VertexOut visualizerVertex(uint id [[vertex_id]],
 fragment float4 visualizerFragment(VertexOut in [[stage_in]])
 {
     return in.color;
-}
-"""
 }
