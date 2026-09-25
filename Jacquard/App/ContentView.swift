@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var engine = JacquardEngine()
     @State private var stageMode = StageMode.on
     @State private var raised: [PanelKind] = []
+    @State private var onboarding = OnboardingState()
     @Environment(\.scenePhase) private var scenePhase
 
     enum PanelKind: String { case channels, send, live, global, system }
@@ -32,7 +33,7 @@ struct ContentView: View {
                 }
 
                 VStack(spacing: 0) {
-                    TransportRow(engine: engine, stageMode: stageMode,
+                    TransportRow(engine: engine, stageMode: stageMode, onboarding: onboarding,
                                  isShown: { raised.contains($0) }, toggle: toggle)
 
                     if compact {
@@ -41,9 +42,19 @@ struct ContentView: View {
                         tabletBody
                     }
                 }
+
+                if Features.onboarding {
+                    OnboardingShade(state: onboarding)
+
+                    if onboarding.panelUp {
+                        OnboardingPanel(state: onboarding)
+                            .padding(Controls.panelGap)
+                    }
+                }
             }
         }
         .task {
+            if OnboardingSetting.wanted { onboarding.show() }
             engine.followLaunchArguments()
             // `-panels live,system` opens panels at launch, for the simulator.
             let arguments = ProcessInfo.processInfo.arguments
@@ -56,6 +67,10 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
+        .onChange(of: stageMode) { _, on in
+            // The third page is about a button Stage Mode takes away.
+            if on { onboarding.close() }
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: engine.suspend()
@@ -196,20 +211,29 @@ private struct PanelColumn<Content: View>: View {
 private struct TransportRow: View {
     let engine: JacquardEngine
     let stageMode: Bool
+    let onboarding: OnboardingState
     let isShown: (ContentView.PanelKind) -> Bool
     let toggle: (ContentView.PanelKind) -> Void
 
     @State private var slots: [String] = []
+    @State private var scoresStart: CGRect = .null
+    @State private var scoresEnd: CGRect = .null
+
+    static let end = "end"
 
     static let tempoRange = BarRange(20, 300, snap: 1, unit: "bpm", digits: 0)
 
     var body: some View {
         let revision = engine.panelRevision
 
+        ScrollViewReader { reader in
         ScrollView(.horizontal) {
             HStack(spacing: Controls.gap) {
                 PushButton(label: engine.isPlaying ? "Stop" : "Play", width: Controls.width(54),
                            active: engine.isPlaying) { engine.togglePlay() }
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                        onboarding.playFrame = $0
+                    }
 
                 ValueBar(range: TransportRow.tempoRange, get: { engine.tempo },
                          set: { engine.tempo = $0 }, revision: revision)
@@ -231,6 +255,10 @@ private struct TransportRow: View {
                 }
                 .padding(.bottom, -Controls.gap)
                 .frame(width: 150)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                    scoresStart = $0
+                    onboarding.scoresFrame = scoresStart.union(scoresEnd)
+                }
 
                 if !stageMode {
                     PushButton(label: "Save", width: Controls.width(44)) {
@@ -241,6 +269,10 @@ private struct TransportRow: View {
 
                 PushButton(label: "Load", width: Controls.width(44)) { engine.load() }
                     .opacity(engine.locked ? Style.dimmedOpacity : 1)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                        scoresEnd = $0
+                        onboarding.scoresFrame = scoresStart.union(scoresEnd)
+                    }
 
                 Text(engine.message)
                     .font(Style.font(Controls.fontSize))
@@ -255,14 +287,30 @@ private struct TransportRow: View {
                             UIApplication.shared.open(url)
                         }
                     }
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                        onboarding.guideFrame = $0
+                    }
                 }
+
+                Color.clear.frame(width: 0, height: 0).id(TransportRow.end)
             }
             .padding(.horizontal, Controls.inset)
             .frame(height: Controls.transportRowHeight)
         }
         .scrollIndicators(.hidden)
         .background(Style.panel.ignoresSafeArea(edges: .top))
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+            onboarding.rowFrame = $0
+        }
         .onAppear { slots = engine.slots() }
+        // The second and third pages are about controls at the far end of the row, so
+        // the row is sent along to bring them into view.
+        .onChange(of: onboarding.page) { _, page in
+            if page > 0 && onboarding.shown {
+                withAnimation { reader.scrollTo(TransportRow.end, anchor: .trailing) }
+            }
+        }
+        }
     }
 
     private func toggle(_ label: String, _ kind: ContentView.PanelKind) -> some View {

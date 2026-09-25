@@ -43,10 +43,30 @@ Scores live in `Documents/Scores`, which the Files app shows under On My iPhone 
 › Jacquard. A fresh install writes the five samples and nine empty slots there, as the
 original does, and pick one with the arrows beside Save and Load.
 
+A first launch opens on the original's three welcome pages, with the screen greyed
+behind them except the control each page is about.
+
 ## Not ported yet
 
-- The three onboarding pages shown on first launch
 - Measured clock calibration (`DspClock`); the driver uses a fixed lead of two IO buffers
+
+## Building something else on it
+
+This repo is meant as a base for new synth and drum machine ideas. Where to start:
+
+| To change | Look at |
+| --- | --- |
+| Parts of the product a fork may not want | `Jacquard/App/Features.swift` — `onboarding = false` removes the welcome pages outright |
+| The voice itself (oscillators, envelopes) | `Jacquard/Audio/FmVoice.swift` (`FmPartial`, `FmVoiceState`) |
+| What a note carries into the synth | `FmNoteEvent` in `Jacquard/Core/Synth/FmPatch.swift` |
+| The mix chain: sends, limiter, clip, scope | `FmSynthCore.render` in `Jacquard/Audio/FmSynth.swift` |
+| Which parameters a channel has and a lock can reach | `FmPatch` and `ParamTargets` (add a field to both; the Tile panel and the file format follow) |
+| The sequencing rules | `Jacquard/Core/Sequencer/Sequencer.swift` |
+| New tile kinds | `Jacquard/Core/Model/Tile.swift`, `ProjectFormat`, `TileIcons`, and the palette in `InspectorPanel` |
+| The visualizer | `Jacquard/Visual` — nothing else depends on it |
+
+For one run, `-skipOnboarding` as a launch argument skips the pages without changing
+the switch.
 
 ## Building
 
