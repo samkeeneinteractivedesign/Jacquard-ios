@@ -205,8 +205,11 @@ final class FmSynth {
 
     var scope: FmSynthScope? { core?.scope }
 
-    init(maxVoices: Int, queueCapacity: Int = 512) {
+    // bufferFrames is the IO buffer asked of the session (DspBuffer), which the system
+    // may round.
+    init(maxVoices: Int, bufferFrames: Int = 1024, queueCapacity: Int = 512) {
         self.maxVoices = maxVoices
+        self.bufferFrames = bufferFrames
         self.queueCapacity = queueCapacity
         start()
     }
@@ -318,7 +321,7 @@ final class FmSynth {
         do {
             try session.setCategory(.playback, options: [.mixWithOthers])
             try session.setPreferredSampleRate(48000)
-            try session.setPreferredIOBufferDuration(1024.0 / 48000.0)
+            try session.setPreferredIOBufferDuration(Double(bufferFrames) / 48000.0)
             try session.setActive(true)
         } catch {
             print("Jacquard: audio session refused playback: \(error)")
@@ -352,6 +355,7 @@ final class FmSynth {
     }
 
     private let queueCapacity: Int
+    private let bufferFrames: Int
     private let engine = AVAudioEngine()
     private var source: AVAudioSourceNode?
     private var core: FmSynthCore?

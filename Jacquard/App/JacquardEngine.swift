@@ -2,9 +2,9 @@ import Foundation
 import QuartzCore
 import Observation
 
-// The app: the project, the sequencer, the live effects and the synth, and the frame that
-// runs them. Ported from the parts of Assets/Jacquard/App/JacquardApp.cs that are not
-// Unity plumbing.
+// The app: the project, the sequencer, the live effects and the synth, the score folder,
+// and the frame that runs them. Ported from the parts of Assets/Jacquard/App/JacquardApp.cs
+// that are not Unity plumbing.
 //
 // The sequencer runs its full lookahead ahead of the audio clock every frame and parks
 // what it produces with the live effects; a note is handed to the synth only once it is
@@ -13,40 +13,68 @@ import Observation
 @Observable
 final class JacquardEngine {
     // How far ahead of the audio clock the sequencer runs.
-    var lookahead: Float = 0.12
+    @ObservationIgnored var lookahead: Float = 0.12
 
     // The floor of the handover window. See handoverSeconds.
-    var liveLead: Float = 0.03
+    @ObservationIgnored var liveLead: Float = 0.03
 
     static let maxVoices = 24
 
     private(set) var project: Project
     @ObservationIgnored let sequencer = Sequencer()
     @ObservationIgnored let live = LiveFx()
+    @ObservationIgnored let store = ProjectStore()
     @ObservationIgnored private(set) var synth: FmSynth?
 
-    // Bumped whenever the plane has to be redrawn from the score.
-    private(set) var revision = 0
+    @ObservationIgnored private(set) var editor: ScoreEditor!
+
+    // Bumped whenever the plane has to be redrawn from the score, and whenever a panel
+    // has to read the model again. The model is plain classes, so these are what tell
+    // SwiftUI something under it moved.
+    private(set) var planeRevision = 0
+    private(set) var panelRevision = 0
 
     private(set) var isPlaying = false
     private(set) var isSwitchPending = false
     private(set) var message = ""
-    private(set) var status = FmSynthStatus()
 
-    // The lane under the hand, whose channel the visualizer's second trace follows.
-    var selectedLane: Lane? { didSet { revision += 1 } }
+    // Not observed, so it does not redraw the screen every frame.
+    @ObservationIgnored private(set) var status = FmSynthStatus()
+
+    var visualizerOn = VisualizerSetting.on {
+        didSet { VisualizerSetting.on = visualizerOn }
+    }
 
     // The plane is held still while a score waits for the turn of the piece.
     var locked: Bool { isSwitchPending }
 
+    // The pan across the plane, in points.
+    var pan: CGPoint = .zero
+
     init() {
-        project = Project.createInitial()
-        reframe()
+        project = Project()
+
+        store.seed(samples: 5) { index in
+            guard let url = Bundle.main.url(forResource: ProjectStore.sampleName(index),
+                                            withExtension: ProjectFormat.fileExtension),
+                  let text = try? String(contentsOf: url, encoding: .utf8)
+            else { return nil }
+            return try? ProjectFormat.read(text)
+        }
+
+        store.name = store.opening()
+        project = store.load().0 ?? Project.createInitial()
+
+        editor = ScoreEditor(engine: self)
+
+        reframe(arrived: true)
+        showScore()
 
         sequencer.project = project
         sequencer.switched = { [weak self] at in self?.onSwitched(at) }
 
-        synth = FmSynth(maxVoices: JacquardEngine.maxVoices)
+        DspBuffer.applied = DspBuffer.requested
+        synth = FmSynth(maxVoices: JacquardEngine.maxVoices, bufferFrames: DspBuffer.applied)
 
         displayLink = CADisplayLink(target: DisplayTarget(self), selector: #selector(DisplayTarget.tick(_:)))
         displayLink?.add(to: .main, forMode: .common)
@@ -77,30 +105,25 @@ final class JacquardEngine {
 
     func resume() { synth?.resume() }
 
-    // MARK: Scores
-
-    static let bundledScores = ["sample1", "sample2", "sample3", "sample4", "sample5"]
-
-    func loadBundled(_ name: String) {
-        guard let url = Bundle.main.url(forResource: name, withExtension: ProjectFormat.fileExtension),
-              let text = try? String(contentsOf: url, encoding: .utf8)
-        else {
-            message = "could not find \(name)"
-            return
-        }
-        load(text, name: name)
+    var tempo: Float {
+        get { project.tempo }
+        set { project.tempo = newValue; touchPanels() }
     }
 
-    func loadInitial() { bringIn(Project.createInitial(), message: "new score") }
+    // MARK: Scores
 
-    func loadSpecExample() { bringIn(Project.createSample(), message: "spec example") }
+    func slots() -> [String] { store.slots() }
 
-    func load(_ text: String, name: String) {
-        do {
-            bringIn(try ProjectFormat.read(text), message: "loaded \(name)")
-        } catch {
-            message = "could not read \(name): \(error.localizedDescription)"
-        }
+    func save() {
+        message = store.save(project)
+        touchPanels()
+    }
+
+    func load() {
+        if locked { return }
+        let (loaded, text) = store.load()
+        message = text
+        if let loaded { bringIn(loaded, message: text) }
     }
 
     // A load while playing waits for the turn of the piece, and cannot be taken back
@@ -113,6 +136,17 @@ final class JacquardEngine {
 
         isSwitchPending = sequencer.isSwitchPending
         if isSwitchPending { self.message = message + ", in at the turn of the piece" }
+    }
+
+    // For running on a simulator without a hand: `-load sample1` loads a score from the
+    // folder and `-autoplay` presses Play.
+    func followLaunchArguments() {
+        let arguments = ProcessInfo.processInfo.arguments
+        if let i = arguments.firstIndex(of: "-load"), i + 1 < arguments.count {
+            store.name = arguments[i + 1]
+            load()
+        }
+        if arguments.contains("-autoplay") && !isPlaying { togglePlay() }
     }
 
     // The sequencer changes hands up to a lookahead before the seam is heard, so the
@@ -128,21 +162,11 @@ final class JacquardEngine {
         adoptAt = nil
 
         project = sequencer.project
-        selectedLane = nil
-        reframe()
+        reframe(arrived: true)
 
         isSwitchPending = sequencer.isSwitchPending
-        revision += 1
-    }
-
-    // For running on a simulator without a hand: `-load sample1` loads a bundled score
-    // and `-autoplay` presses Play.
-    func followLaunchArguments() {
-        let arguments = ProcessInfo.processInfo.arguments
-        if let i = arguments.firstIndex(of: "-load"), i + 1 < arguments.count {
-            loadBundled(arguments[i + 1])
-        }
-        if arguments.contains("-autoplay") && !isPlaying { togglePlay() }
+        planeRevision += 1
+        panelRevision += 1
     }
 
     // MARK: Live effects
@@ -154,12 +178,16 @@ final class JacquardEngine {
 
     func release(_ fx: LiveEffect) { live.release(fx) }
 
-    // MARK: Channels
+    // MARK: Redrawing
 
-    func setMuted(_ channel: Int, _ muted: Bool) {
-        project.mutes.setMuted(channel, muted)
-        revision += 1
+    // After an edit: carry the score in if it has come too near an edge, then redraw.
+    func rebuild() {
+        reframe(arrived: false)
+        planeRevision += 1
+        panelRevision += 1
     }
+
+    func touchPanels() { panelRevision += 1 }
 
     // MARK: The frame
 
@@ -192,8 +220,10 @@ final class JacquardEngine {
         }
 
         // Which channel the visualizer's second trace is of: decided here, because it is
-        // a reading of the score, and the visualizer is not allowed to take one.
-        synth.watchChannel(selectedLane.map { project.score.channelOf($0) } ?? 0)
+        // a reading of the score, and the visualizer is not allowed to take one. Nothing,
+        // with the visualizer switched off.
+        let lane = editor.selectedLane
+        synth.watchChannel(lane != nil && visualizerOn ? project.score.channelOf(lane) : 0)
 
         status = synth.status()
 
@@ -213,16 +243,35 @@ final class JacquardEngine {
 
     // MARK: Plane
 
-    // Keeps free ground on the left and above without a coordinate going negative.
+    // The plane keeps ten columns and eight rows of empty ground past the score. To the
+    // right and below that is the plane's own size; to the left and above the score is
+    // carried further in instead, and the pan and the cursor move with it so nothing on
+    // screen jumps. A score arriving is not a score moving, and takes up no pan.
     static let padColumns = 10
     static let padRows = 8
 
-    private func reframe() {
+    private func reframe(arrived: Bool) {
         let score = project.score
         guard !score.lanes.isEmpty else { return }
+
         let dx = max(0, JacquardEngine.padColumns - score.minX)
         let dy = max(0, JacquardEngine.padRows - score.minY)
-        if dx != 0 || dy != 0 { score.translate(dx, dy) }
+        if dx == 0 && dy == 0 { return }
+
+        score.translate(dx, dy)
+        if arrived { return }
+
+        editor.offsetCursor(dx, dy)
+        pan.x += CGFloat(dx) * Style.strideX
+        pan.y += CGFloat(dy) * Style.strideY
+    }
+
+    // Opens on the score, with the cursor on its master lane's head.
+    private func showScore() {
+        let score = project.score
+        if let master = score.masterLane { editor.setCursor(master.headPoint) }
+        pan = CGPoint(x: max(0, Style.cellOrigin(GridPoint(score.minX, 0)).x - Style.strideX),
+                      y: max(0, Style.cellOrigin(GridPoint(0, score.minY)).y - Style.strideY))
     }
 
     var planeColumns: Int { max(48, project.score.width + JacquardEngine.padColumns) }

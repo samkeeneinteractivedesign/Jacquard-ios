@@ -21,14 +21,14 @@ enum LiveEffect: Int, CaseIterable {
         case .delay: return "Delay"
         case .stab: return "Stab"
         case .sustain: return "Sustain"
-        case .octaveDown: return "Oct −"
+        case .octaveDown: return "Oct -"
         case .octaveUp: return "Oct +"
         case .fall: return "Fall"
         case .rise: return "Rise"
-        case .roll1: return "Roll 1"
-        case .roll2: return "Roll 2"
-        case .roll3: return "Roll 3"
-        case .roll4: return "Roll 4"
+        case .roll1: return "Roll 1/16"
+        case .roll2: return "Roll 1/8"
+        case .roll3: return "Roll 3/16"
+        case .roll4: return "Roll 1/4"
         }
     }
 }

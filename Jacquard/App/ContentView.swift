@@ -1,38 +1,98 @@
 import SwiftUI
 
-// The screen: the visualizer behind everything, the plane scrolling over it, and the
-// transport row along the bottom on a ground of its own, since a row of controls with a
-// waveform running behind it has to be read through something.
+// The screen. Ported from the layout half of Assets/Jacquard/UI/JacquardUI.cs.
 //
-// This is the first cut of the interface. The Unity app's panels — the tile inspector,
-// the Sound, Send FX, Global, Channels and System panels, and editing by drag — are the
-// next part of the port; see README.md.
+// The visualizer behind everything; the plane over it; the transport row along the top
+// on a ground of its own; and the panels standing on the plane — the Tile panel in the
+// right column outermost with Send FX inside it, Channels on the left, Global and System
+// in the centre, Live FX across the bottom. Everything the transport row switches starts
+// off.
 
 struct ContentView: View {
     @State private var engine = JacquardEngine()
-    @State private var position = ScrollPosition(edge: .top)
+    @State private var stageMode = StageMode.on
+    @State private var shown: Set<PanelKind> = []
     @Environment(\.scenePhase) private var scenePhase
 
+    enum PanelKind: String { case channels, send, live, global, system }
+
     var body: some View {
+        let editor = engine.editor!
+
         ZStack {
-            VisualizerView(engine: engine)
-                .ignoresSafeArea()
+            if engine.visualizerOn {
+                VisualizerView(engine: engine)
+                    .ignoresSafeArea()
+            } else {
+                Style.background.ignoresSafeArea()
+            }
 
             VStack(spacing: 0) {
-                ScrollView([.horizontal, .vertical]) {
-                    ScorePlaneView(engine: engine)
-                }
-                .scrollIndicators(.hidden)
-                .scrollPosition($position)
-                .onAppear { revealScore() }
-                .onChange(of: engine.project.score.lanes.count) { revealScore() }
+                TransportRow(engine: engine, stageMode: stageMode, shown: $shown)
 
-                TransportBar(engine: engine)
+                ZStack(alignment: .top) {
+                    ScorePlaneView(engine: engine, editor: editor)
+
+                    // Each column is laid over the plane without taking any room from it
+                    // or from the others. On a phone the columns meet, and a panel a
+                    // switch raised stands in front of the Tile panel, since it is the one
+                    // just asked for.
+                    Color.clear
+                        .overlay(alignment: .topTrailing) {
+                            HStack(alignment: .top, spacing: Controls.panelGap) {
+                                PanelColumn {
+                                    if shown.contains(.send) { SendPanel(engine: engine, editor: editor) }
+                                }
+                                PanelColumn {
+                                    InspectorPanel(engine: engine, editor: editor)
+                                }
+                            }
+                        }
+                        .overlay(alignment: .top) {
+                            PanelColumn {
+                                if shown.contains(.global) { GlobalPanel(engine: engine, editor: editor) }
+                                if shown.contains(.system) {
+                                    SystemPanel(engine: engine, editor: editor, stageMode: $stageMode)
+                                }
+                            }
+                        }
+                        .overlay(alignment: .topLeading) {
+                            PanelColumn {
+                                if shown.contains(.channels) {
+                                    ChannelsPanel(engine: engine, editor: editor, stageMode: stageMode)
+                                }
+                            }
+                        }
+                        .padding(Controls.panelGap)
+
+                    if shown.contains(.live) {
+                        VStack {
+                            Spacer()
+                            ScrollView(.horizontal) {
+                                LivePanel(engine: engine)
+                            }
+                            .scrollIndicators(.hidden)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, Controls.panelGap)
+                            .padding(.bottom, Controls.panelGap)
+                        }
+                    }
+                }
             }
         }
-        .task { engine.followLaunchArguments() }
+        .task {
+            engine.followLaunchArguments()
+            // `-panels live,system` opens panels at launch, for the simulator.
+            let arguments = ProcessInfo.processInfo.arguments
+            if let i = arguments.firstIndex(of: "-panels"), i + 1 < arguments.count {
+                for name in arguments[i + 1].split(separator: ",") {
+                    if let kind = PanelKind(rawValue: String(name)) { shown.insert(kind) }
+                }
+            }
+        }
         .preferredColorScheme(.dark)
         .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: engine.suspend()
@@ -43,134 +103,107 @@ struct ContentView: View {
     }
 }
 
-extension ContentView {
-    // Opens on the score rather than on the free ground the plane keeps above and to the
-    // left of it.
-    fileprivate func revealScore() {
-        let score = engine.project.score
-        let corner = Style.cellOrigin(GridPoint(score.minX, score.minY))
-        position.scrollTo(point: CGPoint(x: max(0, corner.x - Style.strideX),
-                                         y: max(0, corner.y - Style.strideY)))
-    }
-}
-
-private struct TransportBar: View {
-    let engine: JacquardEngine
+// A column of panels that is as tall as what it holds, and scrolls once that is more
+// than the screen — without claiming the empty plane below it.
+private struct PanelColumn<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @State private var height: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                PanelButton(label: engine.isPlaying ? "Stop" : "Play", active: engine.isPlaying) {
-                    engine.togglePlay()
-                }
-
-                Menu {
-                    Button("New score") { engine.loadInitial() }
-                    Button("Spec example") { engine.loadSpecExample() }
-                    Divider()
-                    ForEach(JacquardEngine.bundledScores, id: \.self) { name in
-                        Button(name) { engine.loadBundled(name) }
-                    }
-                } label: {
-                    PanelLabel(text: "Load", active: false)
-                }
-                .disabled(engine.locked)
-
-                Text("\(Format.short(engine.project.tempo, places: 1)) BPM")
-                    .font(Style.font(Style.controlSize))
-                    .foregroundColor(Style.label)
-
-                Spacer(minLength: 0)
-
-                Text(engine.message)
-                    .font(Style.font(Style.controlSize))
-                    .foregroundColor(Style.label)
-                    .lineLimit(1)
-            }
-
-            ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    ForEach(LiveEffect.allCases, id: \.self) { fx in
-                        LiveButton(fx: fx, engine: engine)
-                    }
-                }
+        GeometryReader { geometry in
+            ScrollView(.vertical) {
+                VStack(spacing: Controls.panelGap) { content() }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
             }
             .scrollIndicators(.hidden)
-
-            HStack(spacing: 6) {
-                ForEach(1...PatchBank.channels, id: \.self) { channel in
-                    MuteButton(channel: channel, engine: engine)
-                }
-            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(height, geometry.size.height))
         }
-        .padding(.horizontal, Style.padding)
-        .padding(.vertical, 12)
-        .background(Style.panel.ignoresSafeArea(edges: .bottom))
-        .overlay(alignment: .top) {
-            Rectangle().fill(Style.panelLine).frame(height: 1)
-        }
+        .frame(width: height > 0 ? Controls.panelWidth : 0)
     }
 }
 
-// A live effect lasts only as long as a hand is on it.
-private struct LiveButton: View {
-    let fx: LiveEffect
+// Play and the tempo, the switches that raise the panels, and the score chooser with
+// Save and Load — sliding sideways when it holds more than the screen.
+private struct TransportRow: View {
     let engine: JacquardEngine
-    @State private var held = false
+    let stageMode: Bool
+    @Binding var shown: Set<ContentView.PanelKind>
+
+    @State private var slots: [String] = []
+
+    static let tempoRange = BarRange(20, 300, snap: 1, unit: "bpm", digits: 0)
 
     var body: some View {
-        PanelLabel(text: fx.label, active: held)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !held {
-                            held = true
-                            engine.press(fx)
+        let revision = engine.panelRevision
+
+        ScrollView(.horizontal) {
+            HStack(spacing: Controls.gap) {
+                PushButton(label: engine.isPlaying ? "Stop" : "Play", width: Controls.width(54),
+                           active: engine.isPlaying) { engine.togglePlay() }
+
+                ValueBar(range: TransportRow.tempoRange, get: { engine.tempo },
+                         set: { engine.tempo = $0 }, revision: revision)
+                    .frame(width: Controls.panelWidth - Controls.inset * 2 - Controls.labelWidth)
+
+                separator
+
+                toggle("Channels", .channels)
+                toggle("Send FX", .send)
+                toggle("Live FX", .live)
+                toggle("Global", .global)
+                toggle("System", .system)
+
+                separator
+
+                Chooser(options: slots, index: slots.firstIndex(of: engine.store.name) ?? 0) {
+                    engine.store.name = slots[$0]
+                    engine.touchPanels()
+                }
+                .padding(.bottom, -Controls.gap)
+                .frame(width: 150)
+
+                if !stageMode {
+                    PushButton(label: "Save", width: Controls.width(44)) {
+                        engine.save()
+                        slots = engine.slots()
+                    }
+                }
+
+                PushButton(label: "Load", width: Controls.width(44)) { engine.load() }
+                    .opacity(engine.locked ? Style.dimmedOpacity : 1)
+
+                Text(engine.message)
+                    .font(Style.font(Controls.fontSize))
+                    .foregroundColor(Style.label)
+                    .lineLimit(1)
+                    .padding(.horizontal, Controls.inset)
+
+                if !stageMode {
+                    separator
+                    PushButton(label: "?", width: Controls.rowHeight) {
+                        if let url = URL(string: "https://www.keijiro.tokyo/jacquard-doc/") {
+                            UIApplication.shared.open(url)
                         }
                     }
-                    .onEnded { _ in
-                        held = false
-                        engine.release(fx)
-                    })
+                }
+            }
+            .padding(.horizontal, Controls.inset)
+            .frame(height: Controls.transportRowHeight)
+        }
+        .scrollIndicators(.hidden)
+        .background(Style.panel.ignoresSafeArea(edges: .top))
+        .onAppear { slots = engine.slots() }
     }
-}
 
-// Silent but running: the laps go on being counted.
-private struct MuteButton: View {
-    let channel: Int
-    let engine: JacquardEngine
-
-    var body: some View {
-        let _ = engine.revision
-        let muted = engine.project.mutes.isMuted(channel)
-        PanelButton(label: "CH\(channel)", active: !muted) {
-            engine.setMuted(channel, !muted)
+    private func toggle(_ label: String, _ kind: ContentView.PanelKind) -> some View {
+        PushButton(label: label, width: Controls.width(62), active: shown.contains(kind)) {
+            if shown.contains(kind) { shown.remove(kind) } else { shown.insert(kind) }
         }
     }
-}
 
-private struct PanelButton: View {
-    let label: String
-    let active: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) { PanelLabel(text: label, active: active) }
-            .buttonStyle(.plain)
-    }
-}
-
-private struct PanelLabel: View {
-    let text: String
-    let active: Bool
-
-    var body: some View {
-        Text(text)
-            .font(Style.font(Style.controlSize, bold: active))
-            .foregroundColor(active ? Style.background : Style.noteText)
-            .padding(.horizontal, 10)
-            .frame(minWidth: 44, minHeight: 30)
-            .background(RoundedRectangle(cornerRadius: Style.radius)
-                .fill(active ? Style.noteLine : Style.controlBackground))
+    private var separator: some View {
+        Rectangle().fill(Style.panelLine).frame(width: 1, height: Controls.rowHeight - 2)
+            .padding(.horizontal, 8)
     }
 }
